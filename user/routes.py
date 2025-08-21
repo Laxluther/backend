@@ -143,6 +143,86 @@ def get_current_user(user_id):
     
     return APIResponse.success({'user': user})
 
+@user_bp.route('/profile', methods=['GET'])
+@user_token_required
+def get_user_profile(user_id):
+    """Get user profile information"""
+    user = execute_query("""
+        SELECT u.user_id, u.email, u.first_name, u.last_name, u.phone, 
+               u.referral_code, u.email_verified, u.created_at,
+               w.balance as wallet_balance
+        FROM users u
+        LEFT JOIN wallet w ON u.user_id = w.user_id
+        WHERE u.user_id = %s AND u.status = 'active'
+    """, (user_id,), fetch_one=True)
+    
+    if not user:
+        return APIResponse.not_found('User not found')
+    
+    # Get user's default address
+    default_address = execute_query("""
+        SELECT address_id, full_name, phone, address_line1, address_line2, 
+               city, state, postal_code, country, is_default
+        FROM addresses 
+        WHERE user_id = %s AND is_default = 1
+        LIMIT 1
+    """, (user_id,), fetch_one=True)
+    
+    # Get order stats
+    order_stats = execute_query("""
+        SELECT COUNT(*) as total_orders,
+               SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) as completed_orders,
+               COALESCE(SUM(total_amount), 0) as total_spent
+        FROM orders 
+        WHERE user_id = %s
+    """, (user_id,), fetch_one=True)
+    
+    profile_data = {
+        'user': user,
+        'default_address': default_address,
+        'stats': {
+            'total_orders': order_stats['total_orders'] if order_stats else 0,
+            'completed_orders': order_stats['completed_orders'] if order_stats else 0,
+            'total_spent': float(order_stats['total_spent']) if order_stats and order_stats['total_spent'] else 0.0,
+            'wallet_balance': float(user['wallet_balance']) if user['wallet_balance'] else 0.0
+        }
+    }
+    
+    return APIResponse.success(profile_data)
+
+@user_bp.route('/profile', methods=['PUT'])
+@user_token_required
+def update_user_profile(user_id):
+    """Update user profile information"""
+    data = request.get_json()
+    
+    update_fields = []
+    params = []
+    
+    # Fields that can be updated
+    updatable_fields = ['first_name', 'last_name', 'phone']
+    
+    for field in updatable_fields:
+        if field in data and data[field] is not None:
+            update_fields.append(f"{field} = %s")
+            params.append(data[field].strip() if isinstance(data[field], str) else data[field])
+    
+    if not update_fields:
+        return APIResponse.error('No valid fields to update', 400)
+    
+    # Add updated timestamp and user_id for WHERE clause
+    update_fields.append("updated_at = NOW()")
+    params.append(user_id)
+    
+    # Update user profile
+    execute_query(f"""
+        UPDATE users 
+        SET {', '.join(update_fields)}
+        WHERE user_id = %s AND status = 'active'
+    """, tuple(params))
+    
+    return APIResponse.success({'message': 'Profile updated successfully'})
+
 # Product Routes
 # UPDATE THE EXISTING get_products FUNCTION IN user/routes.py
 

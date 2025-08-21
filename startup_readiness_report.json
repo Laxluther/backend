@@ -1,0 +1,63 @@
+{
+  "timestamp": "2025-08-21T23:28:48.681251",
+  "overall_score": 96.5,
+  "categories": {
+    "api_functionality": {
+      "score": 100.0,
+      "critical_score": 100.0,
+      "passed": 6,
+      "total": 6,
+      "status": "GOOD"
+    },
+    "database": {
+      "score": 100,
+      "status": "GOOD",
+      "issues": []
+    },
+    "security": {
+      "score": 95,
+      "status": "GOOD",
+      "features": [
+        "Admin authentication protection",
+        "Frame protection",
+        "MIME type protection",
+        "XSS protection",
+        "HTTPS enforcement",
+        "CORS configured"
+      ]
+    },
+    "performance": {
+      "score": 80,
+      "status": "GOOD",
+      "features": [
+        "Image serving functional",
+        "Caching headers present"
+      ],
+      "avg_response_time": 312.4862511952718
+    },
+    "business": {
+      "score": 100,
+      "status": "GOOD",
+      "features": [
+        "Complete product catalog",
+        "Product search",
+        "Admin management system",
+        "Admin dashboard"
+      ]
+    },
+    "deployment": {
+      "score": 85,
+      "status": "GOOD",
+      "features": [
+        "Application accessible",
+        "HTTPS enabled",
+        "Proper error handling"
+      ]
+    }
+  },
+  "recommendations": [
+    "Set up custom domain for professional appearance"
+  ],
+  "critical_issues": [],
+  "startup_ready": true
+}

@@ -90,9 +90,20 @@ def create_app():
     return app
 
 # Create app instance for gunicorn
-app = create_app()
+try:
+    app = create_app()
+except Exception as e:
+    print(f"Error creating app: {e}")
+    # Create a basic app for debugging
+    from flask import Flask
+    app = Flask(__name__)
+    
+    @app.route('/health')
+    def health():
+        return {'status': 'error', 'message': str(e)}, 500
     
 if __name__ == '__main__':
     import os
     port = int(os.environ.get('PORT', 5000))
-    app.websocket_manager.socketio.run(app, debug=False, host='0.0.0.0', port=port)
+    print(f"Starting app on port {port}")
+    app.websocket_manager.socketio.run(app, debug=False, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)

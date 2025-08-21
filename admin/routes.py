@@ -988,3 +988,194 @@ def get_referral_stats(admin_id):
         'pending_referrals': stats['pending_referrals'] or 0,
         'total_rewards_paid': float(stats['total_rewards_paid'] or 0)
     }), 200
+
+@admin_bp.route('/inventory', methods=['GET'])
+@admin_token_required
+def get_inventory(admin_id):
+    """Get inventory information for all products"""
+    
+    # Get query parameters for filtering and pagination
+    page = int(request.args.get('page', 1))
+    limit = int(request.args.get('limit', 50))
+    status = request.args.get('status')  # 'low_stock', 'out_of_stock', 'in_stock'
+    search = request.args.get('search', '').strip()
+    
+    offset = (page - 1) * limit
+    
+    # Build where conditions
+    where_conditions = ["p.status != 'deleted'"]
+    params = []
+    
+    # Add stock status filter
+    if status == 'out_of_stock':
+        where_conditions.append("(i.quantity IS NULL OR i.quantity = 0)")
+    elif status == 'low_stock':
+        where_conditions.append("(i.quantity > 0 AND i.quantity <= i.low_stock_threshold)")
+    elif status == 'in_stock':
+        where_conditions.append("i.quantity > i.low_stock_threshold")
+    
+    # Add search filter
+    if search:
+        where_conditions.append("(p.product_name LIKE %s OR p.sku LIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    
+    where_clause = " AND ".join(where_conditions)
+    
+    # Get inventory data
+    inventory = execute_query(f"""
+        SELECT 
+            p.product_id,
+            p.product_name,
+            p.sku,
+            p.status as product_status,
+            i.quantity,
+            i.reserved_quantity,
+            i.low_stock_threshold,
+            i.location,
+            i.last_updated,
+            c.category_name,
+            CASE 
+                WHEN i.quantity IS NULL OR i.quantity = 0 THEN 'out_of_stock'
+                WHEN i.quantity <= i.low_stock_threshold THEN 'low_stock'
+                ELSE 'in_stock'
+            END as stock_status,
+            (i.quantity - COALESCE(i.reserved_quantity, 0)) as available_quantity,
+            (SELECT pi.image_url FROM product_images pi 
+             WHERE pi.product_id = p.product_id AND pi.is_primary = 1 
+             LIMIT 1) as primary_image
+        FROM products p
+        LEFT JOIN inventory i ON p.product_id = i.product_id
+        LEFT JOIN categories c ON p.category_id = c.category_id
+        WHERE {where_clause}
+        ORDER BY 
+            CASE 
+                WHEN i.quantity IS NULL OR i.quantity = 0 THEN 1
+                WHEN i.quantity <= i.low_stock_threshold THEN 2
+                ELSE 3
+            END,
+            p.product_name ASC
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset], fetch_all=True)
+    
+    # Get total count for pagination
+    count_result = execute_query(f"""
+        SELECT COUNT(*) as total
+        FROM products p
+        LEFT JOIN inventory i ON p.product_id = i.product_id
+        LEFT JOIN categories c ON p.category_id = c.category_id
+        WHERE {where_clause}
+    """, params, fetch_one=True)
+    
+    total_items = count_result['total'] if count_result else 0
+    total_pages = (total_items + limit - 1) // limit
+    
+    # Convert image URLs
+    inventory = convert_products_images(inventory)
+    
+    # Get summary statistics
+    stats = execute_query("""
+        SELECT 
+            COUNT(*) as total_products,
+            SUM(CASE WHEN i.quantity IS NULL OR i.quantity = 0 THEN 1 ELSE 0 END) as out_of_stock,
+            SUM(CASE WHEN i.quantity > 0 AND i.quantity <= i.low_stock_threshold THEN 1 ELSE 0 END) as low_stock,
+            SUM(CASE WHEN i.quantity > i.low_stock_threshold THEN 1 ELSE 0 END) as in_stock,
+            SUM(COALESCE(i.quantity, 0)) as total_quantity,
+            SUM(COALESCE(i.reserved_quantity, 0)) as total_reserved
+        FROM products p
+        LEFT JOIN inventory i ON p.product_id = i.product_id
+        WHERE p.status != 'deleted'
+    """, fetch_one=True)
+    
+    return jsonify({
+        'inventory': inventory,
+        'pagination': {
+            'page': page,
+            'limit': limit,
+            'total': total_items,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'has_prev': page > 1
+        },
+        'stats': {
+            'total_products': stats['total_products'] or 0,
+            'out_of_stock': stats['out_of_stock'] or 0,
+            'low_stock': stats['low_stock'] or 0,
+            'in_stock': stats['in_stock'] or 0,
+            'total_quantity': stats['total_quantity'] or 0,
+            'total_reserved': stats['total_reserved'] or 0
+        }
+    }), 200
+
+@admin_bp.route('/inventory/<int:product_id>', methods=['PUT'])
+@admin_token_required
+def update_inventory(admin_id, product_id):
+    """Update inventory for a specific product"""
+    
+    data = request.get_json()
+    quantity = data.get('quantity')
+    low_stock_threshold = data.get('low_stock_threshold')
+    location = data.get('location')
+    
+    if quantity is None:
+        return jsonify({'error': 'Quantity is required'}), 400
+    
+    try:
+        quantity = int(quantity)
+        if quantity < 0:
+            return jsonify({'error': 'Quantity cannot be negative'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid quantity value'}), 400
+    
+    # Check if product exists
+    product = execute_query("""
+        SELECT product_id, product_name FROM products WHERE product_id = %s
+    """, (product_id,), fetch_one=True)
+    
+    if not product:
+        return jsonify({'error': 'Product not found'}), 404
+    
+    # Check if inventory record exists
+    existing_inventory = execute_query("""
+        SELECT inventory_id FROM inventory WHERE product_id = %s
+    """, (product_id,), fetch_one=True)
+    
+    if existing_inventory:
+        # Update existing inventory
+        update_fields = ["quantity = %s", "last_updated = NOW()"]
+        params = [quantity]
+        
+        if low_stock_threshold is not None:
+            update_fields.append("low_stock_threshold = %s")
+            params.append(low_stock_threshold)
+        
+        if location:
+            update_fields.append("location = %s")
+            params.append(location.strip())
+        
+        params.append(product_id)
+        
+        execute_query(f"""
+            UPDATE inventory 
+            SET {', '.join(update_fields)}
+            WHERE product_id = %s
+        """, tuple(params))
+    else:
+        # Create new inventory record
+        execute_query("""
+            INSERT INTO inventory (product_id, quantity, low_stock_threshold, location, last_updated)
+            VALUES (%s, %s, %s, %s, NOW())
+        """, (product_id, quantity, low_stock_threshold or 10, location or 'main_warehouse'))
+    
+    # Log admin action
+    execute_query("""
+        INSERT INTO admin_logs (admin_id, action, entity_type, entity_id, details, created_at)
+        VALUES (%s, 'inventory_update', 'product', %s, %s, NOW())
+    """, (admin_id, product_id, 
+          json.dumps({
+              'quantity': quantity,
+              'low_stock_threshold': low_stock_threshold,
+              'location': location,
+              'product_name': product['product_name']
+          })))
+    
+    return jsonify({'message': 'Inventory updated successfully'}), 200

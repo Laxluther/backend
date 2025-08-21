@@ -96,6 +96,175 @@ def public_product_detail(product_id):
     
     return jsonify({'product': product}), 200
 
+@shared_bp.route('/public/products', methods=['GET'])
+def public_products():
+    """Get all public products with pagination and filtering"""
+    from flask import request
+    
+    # Get query parameters
+    page = int(request.args.get('page', 1))
+    limit = int(request.args.get('limit', 20))
+    category_id = request.args.get('category_id')
+    sort_by = request.args.get('sort_by', 'created_at')
+    order = request.args.get('order', 'DESC')
+    
+    # Calculate offset
+    offset = (page - 1) * limit
+    
+    # Build query
+    where_conditions = ["p.status = 'active'"]
+    params = []
+    
+    if category_id:
+        where_conditions.append("p.category_id = %s")
+        params.append(category_id)
+    
+    # Validate sort options
+    valid_sort_fields = ['created_at', 'price', 'product_name', 'discount_price']
+    if sort_by not in valid_sort_fields:
+        sort_by = 'created_at'
+    
+    if order.upper() not in ['ASC', 'DESC']:
+        order = 'DESC'
+    
+    where_clause = " AND ".join(where_conditions)
+    
+    # Get products with pagination
+    products = execute_query(f"""
+        SELECT p.product_id, p.product_name, p.price, p.discount_price, p.brand,
+               p.description, p.created_at, c.category_name,
+               (SELECT pi.image_url FROM product_images pi 
+                WHERE pi.product_id = p.product_id AND pi.is_primary = 1 
+                LIMIT 1) as primary_image,
+               (SELECT i.quantity FROM inventory i 
+                WHERE i.product_id = p.product_id) as stock_quantity
+        FROM products p 
+        LEFT JOIN categories c ON p.category_id = c.category_id
+        WHERE {where_clause}
+        ORDER BY p.{sort_by} {order}
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset], fetch_all=True)
+    
+    # Get total count for pagination
+    count_result = execute_query(f"""
+        SELECT COUNT(*) as total
+        FROM products p
+        WHERE {where_clause}
+    """, params, fetch_one=True)
+    
+    total_products = count_result['total'] if count_result else 0
+    total_pages = (total_products + limit - 1) // limit
+    
+    # Convert image URLs and add stock status
+    products = convert_products_images(products)
+    
+    for product in products:
+        product['in_stock'] = (product.get('stock_quantity') or 0) > 0
+        if product.get('discount_price') and product.get('price'):
+            product['savings'] = round(float(product['price']) - float(product['discount_price']), 2)
+        else:
+            product['savings'] = 0
+    
+    return jsonify({
+        'products': products,
+        'pagination': {
+            'page': page,
+            'limit': limit,
+            'total': total_products,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'has_prev': page > 1
+        }
+    }), 200
+
+@shared_bp.route('/public/products/search', methods=['POST'])
+def public_products_search():
+    """Search products by name, description, or category"""
+    from flask import request
+    
+    data = request.get_json()
+    query = data.get('query', '').strip()
+    category_id = data.get('category_id')
+    page = int(data.get('page', 1))
+    limit = int(data.get('limit', 20))
+    
+    if not query:
+        return jsonify({'error': 'Search query is required'}), 400
+    
+    # Calculate offset
+    offset = (page - 1) * limit
+    
+    # Build search query
+    search_conditions = [
+        "p.status = 'active'",
+        "(p.product_name LIKE %s OR p.description LIKE %s OR c.category_name LIKE %s)"
+    ]
+    
+    search_term = f"%{query}%"
+    params = [search_term, search_term, search_term]
+    
+    if category_id:
+        search_conditions.append("p.category_id = %s")
+        params.append(category_id)
+    
+    where_clause = " AND ".join(search_conditions)
+    
+    # Search products
+    products = execute_query(f"""
+        SELECT p.product_id, p.product_name, p.price, p.discount_price, p.brand,
+               p.description, p.created_at, c.category_name,
+               (SELECT pi.image_url FROM product_images pi 
+                WHERE pi.product_id = p.product_id AND pi.is_primary = 1 
+                LIMIT 1) as primary_image,
+               (SELECT i.quantity FROM inventory i 
+                WHERE i.product_id = p.product_id) as stock_quantity
+        FROM products p 
+        LEFT JOIN categories c ON p.category_id = c.category_id
+        WHERE {where_clause}
+        ORDER BY 
+            CASE 
+                WHEN p.product_name LIKE %s THEN 1 
+                WHEN p.description LIKE %s THEN 2
+                ELSE 3 
+            END,
+            p.created_at DESC
+        LIMIT %s OFFSET %s
+    """, params + [search_term, search_term, limit, offset], fetch_all=True)
+    
+    # Get total count
+    count_result = execute_query(f"""
+        SELECT COUNT(*) as total
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.category_id
+        WHERE {where_clause}
+    """, params, fetch_one=True)
+    
+    total_results = count_result['total'] if count_result else 0
+    total_pages = (total_results + limit - 1) // limit
+    
+    # Convert image URLs and add stock status
+    products = convert_products_images(products)
+    
+    for product in products:
+        product['in_stock'] = (product.get('stock_quantity') or 0) > 0
+        if product.get('discount_price') and product.get('price'):
+            product['savings'] = round(float(product['price']) - float(product['discount_price']), 2)
+        else:
+            product['savings'] = 0
+    
+    return jsonify({
+        'products': products,
+        'search_query': query,
+        'pagination': {
+            'page': page,
+            'limit': limit,
+            'total': total_results,
+            'total_pages': total_pages,
+            'has_next': page < total_pages,
+            'has_prev': page > 1
+        }
+    }), 200
+
 @shared_bp.route('/states', methods=['GET'])
 def get_indian_states():
     states = [
