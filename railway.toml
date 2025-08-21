@@ -1,0 +1,14 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on-failure"
+
+[[deploy.volumes]]
+mountPath = "/app/static/uploads"
+name = "image-storage"
+
+[environments.production]
+FLASK_ENV = "production"
