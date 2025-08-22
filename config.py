@@ -77,7 +77,7 @@ class Config:
     REFERRAL_REWARD_AMOUNT = 50
     REFERRAL_MIN_ORDER_AMOUNT = 500
     
-    CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000']
+    CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000').split(',')
     
     @staticmethod
     def allowed_file(filename):
@@ -112,9 +112,9 @@ class ProductionConfig(Config):
     
     # Production URLs
     BACKEND_BASE_URL = os.environ.get('RAILWAY_PUBLIC_DOMAIN', Config.BACKEND_BASE_URL)
-    CORS_ORIGINS = [
-        os.environ.get('FRONTEND_URL', 'http://localhost:3000'),
-        os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'http://localhost:5000')
+    # Temporary fix: ensure localhost is included for development testing
+    CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:5173,http://127.0.0.1:3000').split(',') + [
+        'https://web-production-8bfdb.up.railway.app'
     ]
 
 class TestingConfig(Config):
